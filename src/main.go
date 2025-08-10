@@ -1,10 +1,9 @@
 package main
 
 import (
-	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
+	"compress/bzip2"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,7 +67,7 @@ func downloadRestic(binDir, resticPath string) error {
 	version := strings.TrimPrefix(rel.TagName, "v")
 	goos := runtime.GOOS
 	arch := runtime.GOARCH
-	ext := ".tar.gz"
+	ext := ".bz2"
 	if goos == "windows" {
 		ext = ".zip"
 	}
@@ -130,33 +129,15 @@ func downloadRestic(binDir, resticPath string) error {
 		return nil
 	}
 
-	gz, err := gzip.NewReader(resp2.Body)
+	bz2 := bzip2.NewReader(resp2.Body)
+	out, err := os.OpenFile(resticPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if hdr.Typeflag == tar.TypeReg && hdr.Name == "restic" {
-			out, err := os.OpenFile(resticPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				return err
-			}
-			out.Close()
-			break
-		}
+	if _, err := io.Copy(out, bz2); err != nil {
+		out.Close()
+		return err
 	}
+	out.Close()
 	return nil
 }
