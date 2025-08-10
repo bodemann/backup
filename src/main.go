@@ -23,6 +23,18 @@ type release struct {
 	} `json:"assets"`
 }
 
+type config struct {
+	Repo     string
+	Password string
+}
+
+var embeddedConfig = config{
+	Repo:     "~/tmp/test-backup",
+	Password: "test password",
+}
+
+const pastebinURL = "https://pastebin.com/raw/example"
+
 func main() {
 	binDir := filepath.Join(".", "bin")
 	resticName := "restic"
@@ -48,6 +60,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	cfg := getConfig()
+	fmt.Println("repository:", cfg.Repo)
+	fmt.Println("password:", cfg.Password)
 }
 
 func downloadRestic(binDir, resticPath string) error {
@@ -140,4 +156,53 @@ func downloadRestic(binDir, resticPath string) error {
 	}
 	out.Close()
 	return nil
+}
+
+func getConfig() config {
+	cfg := embeddedConfig
+
+	repoEnv, repoEnvSet := os.LookupEnv("RESTIC-REPO")
+	passEnv, passEnvSet := os.LookupEnv("RESTIC-REPO-PASSWORD")
+	if repoEnvSet {
+		cfg.Repo = repoEnv
+	}
+	if passEnvSet {
+		cfg.Password = passEnv
+	}
+
+	if repoEnvSet && passEnvSet {
+		return cfg
+	}
+
+	pb, err := fetchPastebinConfig(pastebinURL)
+	if err == nil {
+		if !repoEnvSet {
+			if v, ok := pb["restic-repo"]; ok {
+				cfg.Repo = v
+			}
+		}
+		if !passEnvSet {
+			if v, ok := pb["restic-repo-password"]; ok {
+				cfg.Password = v
+			}
+		}
+	}
+
+	return cfg
+}
+
+func fetchPastebinConfig(url string) (map[string]string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+	var data map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
