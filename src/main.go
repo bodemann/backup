@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/bzip2"
 	"encoding/json"
@@ -81,10 +82,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to ensure repo: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("paths to backup:")
-	for _, p := range cfg.Paths {
-		fmt.Println(" -", p)
+	if err := runBackup(resticPath, cfg, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
+}
+
+func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error {
+	fmt.Fprintln(out, "paths to backup:")
+	for _, p := range cfg.Paths {
+		fmt.Fprintln(out, " -", p)
+	}
+	fmt.Fprint(out, "proceed with backup? [y/N]: ")
+	scanner := bufio.NewScanner(in)
+	scanner.Scan()
+	resp := strings.TrimSpace(scanner.Text())
+	if strings.ToLower(resp) != "y" {
+		fmt.Fprintln(out, "backup aborted")
+		return nil
+	}
+	args := append([]string{"-r", expandUser(cfg.Repo), "backup"}, cfg.Paths...)
+	cmd := exec.Command(resticPath, args...)
+	cmd.Env = append(os.Environ(), "RESTIC_PASSWORD="+cfg.Password)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("restic backup failed: %w", err)
+	}
+	fmt.Fprintln(out, "backup completed")
+	return nil
 }
 
 func downloadRestic(binDir, resticPath string) error {
