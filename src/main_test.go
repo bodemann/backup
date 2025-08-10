@@ -15,18 +15,22 @@ import (
 	"testing"
 )
 
+// roundTripFunc allows mocking HTTP requests in tests.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
+// RoundTrip executes the mocked HTTP request.
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
+// withHTTPClient replaces the default HTTP client for the duration of the test.
 func withHTTPClient(rt http.RoundTripper) func() {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: rt}
 	return func() { http.DefaultClient = oldClient }
 }
 
+// unsetEnv unsets an environment variable for a test and restores it afterwards.
 func unsetEnv(t *testing.T, key string) {
 	t.Helper()
 	if val, ok := os.LookupEnv(key); ok {
@@ -37,6 +41,7 @@ func unsetEnv(t *testing.T, key string) {
 	os.Unsetenv(key)
 }
 
+// TestGetConfigFromEnv ensures environment variables override other config sources.
 func TestGetConfigFromEnv(t *testing.T) {
 	chdir(t, t.TempDir())
 	t.Setenv("RESTIC-REPO", "envrepo")
@@ -51,21 +56,23 @@ func TestGetConfigFromEnv(t *testing.T) {
 	}
 }
 
+// TestGetConfigFromPastebin verifies configuration retrieval from Pastebin.
 func TestGetConfigFromPastebin(t *testing.T) {
 	chdir(t, t.TempDir())
 	unsetEnv(t, "RESTIC-REPO")
 	unsetEnv(t, "RESTIC-REPO-PASSWORD")
 	restore := withHTTPClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass","paths":["/a","/b"]}`
+		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass","paths":["/a","/b"],"pushover-token":"pt","pushover-user":"pu","email-server":"es","email-user":"eu","email-password":"ep","email-from":"ef","email-to":"et"}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
 	}))
 	defer restore()
 	cfg := getConfig()
-	if cfg.Repo != "pb-repo" || cfg.Password != "pb-pass" || fmt.Sprint(cfg.Paths) != fmt.Sprint([]string{"/a", "/b"}) {
+	if cfg.Repo != "pb-repo" || cfg.Password != "pb-pass" || fmt.Sprint(cfg.Paths) != fmt.Sprint([]string{"/a", "/b"}) || cfg.PushoverToken != "pt" || cfg.PushoverUser != "pu" || cfg.EmailServer != "es" || cfg.EmailUser != "eu" || cfg.EmailPassword != "ep" || cfg.EmailFrom != "ef" || cfg.EmailTo != "et" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
 
+// TestGetConfigEnvOverrides checks environment variables override Pastebin config.
 func TestGetConfigEnvOverrides(t *testing.T) {
 	chdir(t, t.TempDir())
 	t.Setenv("RESTIC-REPO", "envrepo")
@@ -81,6 +88,7 @@ func TestGetConfigEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestFetchPastebinConfig verifies successful fetch from a Pastebin URL.
 func TestFetchPastebinConfig(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"a":"b"}`)
@@ -95,6 +103,7 @@ func TestFetchPastebinConfig(t *testing.T) {
 	}
 }
 
+// TestFetchPastebinConfigError ensures errors are returned on HTTP failure.
 func TestFetchPastebinConfigError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -105,6 +114,7 @@ func TestFetchPastebinConfigError(t *testing.T) {
 	}
 }
 
+// chdir changes the working directory for a test and restores it.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 	old, err := os.Getwd()
@@ -117,6 +127,7 @@ func chdir(t *testing.T, dir string) {
 	t.Cleanup(func() { os.Chdir(old) })
 }
 
+// TestGetConfigFromFile loads configuration from a local file.
 func TestGetConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -137,6 +148,7 @@ func TestGetConfigFromFile(t *testing.T) {
 	}
 }
 
+// TestEnsureRepoInit verifies repository initialization when missing.
 func TestEnsureRepoInit(t *testing.T) {
 	repoDir := t.TempDir()
 	restic := filepath.Join(repoDir, "restic")
@@ -158,6 +170,7 @@ touch $repo/config
 	}
 }
 
+// TestDownloadRestic downloads and extracts the restic binary.
 func TestDownloadRestic(t *testing.T) {
 	version := "1.0.0"
 	asset := fmt.Sprintf("restic_%s_%s_%s.bz2", version, runtime.GOOS, runtime.GOARCH)
@@ -192,6 +205,7 @@ func TestDownloadRestic(t *testing.T) {
 	}
 }
 
+// TestRunBackupAbort ensures backup aborts when the user declines.
 func TestRunBackupAbort(t *testing.T) {
 	dir := t.TempDir()
 	restic := filepath.Join(dir, "restic")
@@ -212,6 +226,7 @@ func TestRunBackupAbort(t *testing.T) {
 	}
 }
 
+// TestRunBackupExec runs the backup command when confirmed.
 func TestRunBackupExec(t *testing.T) {
 	dir := t.TempDir()
 	restic := filepath.Join(dir, "restic")

@@ -25,9 +25,16 @@ type release struct {
 }
 
 type config struct {
-	Repo     string
-	Password string
-	Paths    []string
+	Repo          string   `json:"repo"`
+	Password      string   `json:"password"`
+	Paths         []string `json:"paths"`
+	PushoverToken string   `json:"pushover-token"`
+	PushoverUser  string   `json:"pushover-user"`
+	EmailServer   string   `json:"email-server"`
+	EmailUser     string   `json:"email-user"`
+	EmailPassword string   `json:"email-password"`
+	EmailFrom     string   `json:"email-from"`
+	EmailTo       string   `json:"email-to"`
 }
 
 const (
@@ -35,6 +42,8 @@ const (
 	configFile  = "config.json"
 )
 
+// defaultEmbeddedConfig returns the built-in configuration used when no other
+// configuration sources are available.
 func defaultEmbeddedConfig() config {
 	home, _ := os.UserHomeDir()
 	paths := []string{
@@ -43,12 +52,20 @@ func defaultEmbeddedConfig() config {
 		filepath.Join(home, "Desktop"),
 	}
 	return config{
-		Repo:     "~/tmp/test-backup",
-		Password: "test password",
-		Paths:    paths,
+		Repo:          "~/tmp/test-backup",
+		Password:      "test password",
+		Paths:         paths,
+		PushoverToken: "",
+		PushoverUser:  "",
+		EmailServer:   "",
+		EmailUser:     "",
+		EmailPassword: "",
+		EmailFrom:     "",
+		EmailTo:       "",
 	}
 }
 
+// main is the program entry point.
 func main() {
 	binDir := filepath.Join(".", "bin")
 	resticName := "restic"
@@ -88,6 +105,7 @@ func main() {
 	}
 }
 
+// runBackup executes the restic backup command after confirming with the user.
 func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error {
 	fmt.Fprintln(out, "paths to backup:")
 	for _, p := range cfg.Paths {
@@ -113,6 +131,7 @@ func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error
 	return nil
 }
 
+// downloadRestic retrieves the latest restic release for the current platform.
 func downloadRestic(binDir, resticPath string) error {
 	resp, err := http.Get("https://api.github.com/repos/restic/restic/releases/latest")
 	if err != nil {
@@ -205,6 +224,9 @@ func downloadRestic(binDir, resticPath string) error {
 	return nil
 }
 
+// getConfig builds the configuration from defaults, environment variables,
+// Pastebin and an optional local file. It also reports whether the Pastebin
+// configuration was successfully retrieved.
 func getConfig() config {
 	cfg := defaultEmbeddedConfig()
 
@@ -219,7 +241,10 @@ func getConfig() config {
 
 	if !(repoEnvSet && passEnvSet) {
 		pb, err := fetchPastebinConfig(pastebinURL)
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to fetch pastebin config: %v\n", err)
+		} else {
+			fmt.Println("pastebin config fetched successfully")
 			if !repoEnvSet {
 				if v, ok := pb["restic-repo"].(string); ok {
 					cfg.Repo = v
@@ -240,6 +265,27 @@ func getConfig() config {
 				if len(paths) > 0 {
 					cfg.Paths = paths
 				}
+			}
+			if v, ok := pb["pushover-token"].(string); ok {
+				cfg.PushoverToken = v
+			}
+			if v, ok := pb["pushover-user"].(string); ok {
+				cfg.PushoverUser = v
+			}
+			if v, ok := pb["email-server"].(string); ok {
+				cfg.EmailServer = v
+			}
+			if v, ok := pb["email-user"].(string); ok {
+				cfg.EmailUser = v
+			}
+			if v, ok := pb["email-password"].(string); ok {
+				cfg.EmailPassword = v
+			}
+			if v, ok := pb["email-from"].(string); ok {
+				cfg.EmailFrom = v
+			}
+			if v, ok := pb["email-to"].(string); ok {
+				cfg.EmailTo = v
 			}
 		}
 	}
@@ -265,6 +311,7 @@ func getConfig() config {
 	return cfg
 }
 
+// fetchPastebinConfig retrieves JSON configuration from the provided Pastebin URL.
 func fetchPastebinConfig(url string) (map[string]any, error) {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -281,6 +328,7 @@ func fetchPastebinConfig(url string) (map[string]any, error) {
 	return data, nil
 }
 
+// ensureRepo initializes a restic repository if it does not already exist.
 func ensureRepo(resticPath, repo, password string) error {
 	repoPath := expandUser(repo)
 	if _, err := os.Stat(filepath.Join(repoPath, "config")); err == nil {
@@ -295,6 +343,7 @@ func ensureRepo(resticPath, repo, password string) error {
 	return cmd.Run()
 }
 
+// expandUser expands a leading ~ in p to the user's home directory.
 func expandUser(p string) string {
 	if strings.HasPrefix(p, "~") {
 		if home, err := os.UserHomeDir(); err == nil {
