@@ -191,3 +191,50 @@ func TestDownloadRestic(t *testing.T) {
 		t.Fatalf("unexpected file contents: %q", data)
 	}
 }
+
+func TestRunBackupAbort(t *testing.T) {
+	dir := t.TempDir()
+	restic := filepath.Join(dir, "restic")
+	script := fmt.Sprintf("#!/bin/sh\ntouch %s\n", filepath.Join(dir, "executed"))
+	if err := os.WriteFile(restic, []byte(script), 0755); err != nil {
+		t.Fatalf("write restic: %v", err)
+	}
+	cfg := config{Repo: filepath.Join(dir, "repo"), Password: "p", Paths: []string{"/a"}}
+	var out bytes.Buffer
+	if err := runBackup(restic, cfg, strings.NewReader("n\n"), &out); err != nil {
+		t.Fatalf("runBackup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "executed")); err == nil {
+		t.Fatalf("restic executed despite abort")
+	}
+	if !strings.Contains(out.String(), "backup aborted") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRunBackupExec(t *testing.T) {
+	dir := t.TempDir()
+	restic := filepath.Join(dir, "restic")
+	argsFile := filepath.Join(dir, "args")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %s\nif [ \"$RESTIC_PASSWORD\" != \"pass\" ]; then exit 1; fi\n", argsFile)
+	if err := os.WriteFile(restic, []byte(script), 0755); err != nil {
+		t.Fatalf("write restic: %v", err)
+	}
+	repo := filepath.Join(dir, "repo")
+	cfg := config{Repo: repo, Password: "pass", Paths: []string{"/a", "/b"}}
+	var out bytes.Buffer
+	if err := runBackup(restic, cfg, strings.NewReader("y\n"), &out); err != nil {
+		t.Fatalf("runBackup: %v", err)
+	}
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read args: %v", err)
+	}
+	exp := fmt.Sprintf("-r %s backup /a /b", repo)
+	if strings.TrimSpace(string(data)) != exp {
+		t.Fatalf("unexpected args: %q", data)
+	}
+	if !strings.Contains(out.String(), "backup completed") {
+		t.Fatalf("expected completion message, got %q", out.String())
+	}
+}
