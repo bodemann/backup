@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,38 +38,45 @@ func unsetEnv(t *testing.T, key string) {
 }
 
 func TestGetConfigFromEnv(t *testing.T) {
+	chdir(t, t.TempDir())
 	t.Setenv("RESTIC-REPO", "envrepo")
 	t.Setenv("RESTIC-REPO-PASSWORD", "envpass")
 	cfg := getConfig()
 	if cfg.Repo != "envrepo" || cfg.Password != "envpass" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	exp := defaultEmbeddedConfig().Paths
+	if fmt.Sprint(cfg.Paths) != fmt.Sprint(exp) {
+		t.Fatalf("unexpected paths: %v", cfg.Paths)
+	}
 }
 
 func TestGetConfigFromPastebin(t *testing.T) {
+	chdir(t, t.TempDir())
 	unsetEnv(t, "RESTIC-REPO")
 	unsetEnv(t, "RESTIC-REPO-PASSWORD")
 	restore := withHTTPClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass"}`
+		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass","paths":["/a","/b"]}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
 	}))
 	defer restore()
 	cfg := getConfig()
-	if cfg.Repo != "pb-repo" || cfg.Password != "pb-pass" {
+	if cfg.Repo != "pb-repo" || cfg.Password != "pb-pass" || fmt.Sprint(cfg.Paths) != fmt.Sprint([]string{"/a", "/b"}) {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
 
 func TestGetConfigEnvOverrides(t *testing.T) {
+	chdir(t, t.TempDir())
 	t.Setenv("RESTIC-REPO", "envrepo")
 	unsetEnv(t, "RESTIC-REPO-PASSWORD")
 	restore := withHTTPClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass"}`
+		body := `{"restic-repo":"pb-repo","restic-repo-password":"pb-pass","paths":["/a"]}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
 	}))
 	defer restore()
 	cfg := getConfig()
-	if cfg.Repo != "envrepo" || cfg.Password != "pb-pass" {
+	if cfg.Repo != "envrepo" || cfg.Password != "pb-pass" || fmt.Sprint(cfg.Paths) != fmt.Sprint([]string{"/a"}) {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -82,7 +90,7 @@ func TestFetchPastebinConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchPastebinConfig: %v", err)
 	}
-	if m["a"] != "b" {
+	if m["a"].(string) != "b" {
 		t.Fatalf("unexpected map: %v", m)
 	}
 }
@@ -94,6 +102,59 @@ func TestFetchPastebinConfigError(t *testing.T) {
 	defer srv.Close()
 	if _, err := fetchPastebinConfig(srv.URL); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(old) })
+}
+
+func TestGetConfigFromFile(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	data := config{Repo: "filerepo", Password: "filepass", Paths: []string{"/x", "/y"}}
+	b, _ := json.Marshal(data)
+	if err := os.WriteFile(configFile, b, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	unsetEnv(t, "RESTIC-REPO")
+	unsetEnv(t, "RESTIC-REPO-PASSWORD")
+	restore := withHTTPClient(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header), Request: req}, nil
+	}))
+	defer restore()
+	cfg := getConfig()
+	if cfg.Repo != "filerepo" || cfg.Password != "filepass" || fmt.Sprint(cfg.Paths) != fmt.Sprint([]string{"/x", "/y"}) {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestEnsureRepoInit(t *testing.T) {
+	repoDir := t.TempDir()
+	restic := filepath.Join(repoDir, "restic")
+	script := `#!/bin/sh
+while [ "$1" != "" ]; do
+ if [ "$1" = "-r" ]; then shift; repo=$1; fi; shift; done
+mkdir -p $repo
+touch $repo/config
+`
+	if err := os.WriteFile(restic, []byte(script), 0755); err != nil {
+		t.Fatalf("write restic: %v", err)
+	}
+	repoPath := filepath.Join(repoDir, "repo")
+	if err := ensureRepo(restic, repoPath, "pass"); err != nil {
+		t.Fatalf("ensureRepo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "config")); err != nil {
+		t.Fatalf("config not created: %v", err)
 	}
 }
 
