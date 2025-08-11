@@ -25,9 +25,15 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // withHTTPClient replaces the default HTTP client for the duration of the test.
 func withHTTPClient(rt http.RoundTripper) func() {
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: rt}
-	return func() { http.DefaultClient = oldClient }
+	oldDefault := http.DefaultClient
+	old := httpClient
+	c := &http.Client{Transport: rt}
+	http.DefaultClient = c
+	httpClient = c
+	return func() {
+		http.DefaultClient = oldDefault
+		httpClient = old
+	}
 }
 
 // unsetEnv unsets an environment variable for a test and restores it afterwards.
@@ -215,8 +221,12 @@ func TestRunBackupAbort(t *testing.T) {
 	}
 	cfg := config{Repo: filepath.Join(dir, "repo"), Password: "p", Paths: []string{"/a"}}
 	var out bytes.Buffer
-	if err := runBackup(restic, cfg, strings.NewReader("n\n"), &out); err != nil {
+	ok, err := runBackup(restic, cfg, strings.NewReader("n\n"), &out)
+	if err != nil {
 		t.Fatalf("runBackup: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected no backup execution")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "executed")); err == nil {
 		t.Fatalf("restic executed despite abort")
@@ -238,8 +248,12 @@ func TestRunBackupExec(t *testing.T) {
 	repo := filepath.Join(dir, "repo")
 	cfg := config{Repo: repo, Password: "pass", Paths: []string{"/a", "/b"}}
 	var out bytes.Buffer
-	if err := runBackup(restic, cfg, strings.NewReader("y\n"), &out); err != nil {
+	ok, err := runBackup(restic, cfg, strings.NewReader("y\n"), &out)
+	if err != nil {
 		t.Fatalf("runBackup: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected backup execution")
 	}
 	data, err := os.ReadFile(argsFile)
 	if err != nil {
