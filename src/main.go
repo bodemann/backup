@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -75,6 +76,12 @@ func main() {
 		os.Exit(1)
 	}
 	cfg := getConfig()
+	if len(os.Args) > 1 && os.Args[1] == "health" {
+		report := healthReport(resticPath, cfg)
+		fmt.Print(report)
+		notify(cfg, "health report", report)
+		return
+	}
 	fmt.Println("repository:", cfg.Repo)
 	fmt.Println("password:", cfg.Password)
 	if err := ensureRepo(resticPath, cfg.Repo, cfg.Password); err != nil {
@@ -364,4 +371,72 @@ func expandUser(p string) string {
 		}
 	}
 	return p
+}
+
+// healthReport returns a detailed report of the program configuration and environment.
+func healthReport(resticPath string, cfg config) string {
+	var b strings.Builder
+	b.WriteString("health report:\n")
+
+	if out, err := exec.Command(resticPath, "version").Output(); err == nil {
+		b.WriteString("restic available: yes\n")
+		b.WriteString("restic version: " + strings.TrimSpace(string(out)) + "\n")
+	} else {
+		b.WriteString("restic available: no\n")
+	}
+
+	if cfg.PushoverToken != "" && cfg.PushoverUser != "" {
+		b.WriteString("pushover configured: yes\n")
+	} else {
+		b.WriteString("pushover configured: no\n")
+	}
+
+	if cfg.EmailServer != "" && cfg.EmailUser != "" && cfg.EmailPassword != "" && cfg.EmailFrom != "" && cfg.EmailTo != "" {
+		b.WriteString("email configured: yes\n")
+	} else {
+		b.WriteString("email configured: no\n")
+	}
+
+	if data, err := fetchPastebinConfig(pastebinURL); err == nil {
+		b.WriteString("pastebin reachable: yes\n")
+		if bs, err := json.MarshalIndent(data, "", "  "); err == nil {
+			b.WriteString("pastebin content:\n")
+			b.Write(bs)
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString("pastebin reachable: no\n")
+	}
+
+	osInfo := runtime.GOOS
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("cmd", "/C", "ver").Output(); err == nil {
+			osInfo = strings.TrimSpace(string(out))
+		}
+	} else {
+		if out, err := exec.Command("uname", "-sr").Output(); err == nil {
+			osInfo = strings.TrimSpace(string(out))
+		}
+	}
+	b.WriteString("os: " + osInfo + "\n")
+	if u, err := user.Current(); err == nil {
+		b.WriteString("username: " + u.Username + "\n")
+	}
+
+	b.WriteString("backup contents:\n")
+	for _, p := range cfg.Paths {
+		exp := expandUser(p)
+		b.WriteString("path: " + exp + "\n")
+		filepath.Walk(exp, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !info.IsDir() {
+				b.WriteString(" - " + path + "\n")
+			}
+			return nil
+		})
+	}
+
+	return b.String()
 }
