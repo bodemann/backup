@@ -423,19 +423,10 @@ func healthReport(resticPath string, cfg config) string {
 		b.WriteString("username: " + u.Username + "\n")
 	}
 
-	b.WriteString("backup contents:\n")
+	b.WriteString("paths to backup:\n")
 	for _, p := range cfg.Paths {
 		exp := expandUser(p)
-		b.WriteString("path: " + exp + "\n")
-		filepath.Walk(exp, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() {
-				b.WriteString(" - " + path + "\n")
-			}
-			return nil
-		})
+		b.WriteString(" - " + exp + "\n")
 	}
 
 	return b.String()

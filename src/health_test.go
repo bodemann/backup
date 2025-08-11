@@ -41,7 +41,7 @@ func TestHealthReport(t *testing.T) {
 	if !strings.Contains(rep, "\"a\": \"b\"") {
 		t.Fatalf("report missing pastebin content: %s", rep)
 	}
-	if !strings.Contains(rep, "f.txt") {
-		t.Fatalf("report missing file listing: %s", rep)
+	if !strings.Contains(rep, dataDir) {
+		t.Fatalf("report missing backup path: %s", rep)
 	}
 }
