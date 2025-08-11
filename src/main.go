@@ -67,6 +67,7 @@ func defaultEmbeddedConfig() config {
 
 // main is the program entry point.
 func main() {
+	ensureAutoStart()
 	binDir := filepath.Join(".", "bin")
 	resticName := "restic"
 	if runtime.GOOS == "windows" {

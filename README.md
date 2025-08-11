@@ -1,6 +1,10 @@
 # backup
 Backup for friends and family of IT experts.
 
+## Auto start
+
+When executed, the program configures itself to launch automatically at user login on Linux, macOS, and Windows.
+
 ## Configuration
 
 Configuration for the restic repository and password is loaded in the
