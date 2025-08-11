@@ -68,31 +68,12 @@ func defaultEmbeddedConfig() config {
 // main is the program entry point.
 func main() {
 	ensureAutoStart()
-	binDir := filepath.Join(".", "bin")
-	resticName := "restic"
-	if runtime.GOOS == "windows" {
-		resticName += ".exe"
+	printVersion()
+	resticPath, err := ensureRestic()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
-	resticPath := filepath.Join(binDir, resticName)
-
-	if _, err := os.Stat(resticPath); os.IsNotExist(err) {
-		fmt.Println("restic not found, downloading latest release...")
-		if err := downloadRestic(binDir, resticPath); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to download restic: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("restic downloaded to", resticPath)
-	} else {
-		fmt.Println("restic found, performing self-update...")
-		cmd := exec.Command(resticPath, "self-update")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "restic self-update failed: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
 	cfg := getConfig()
 	fmt.Println("repository:", cfg.Repo)
 	fmt.Println("password:", cfg.Password)
@@ -100,14 +81,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to ensure repo: %v\n", err)
 		os.Exit(1)
 	}
-	if err := runBackup(resticPath, cfg, os.Stdin, os.Stdout); err != nil {
+	ok, err := runBackup(resticPath, cfg, os.Stdin, os.Stdout)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
+		notify(cfg, "backup failed", err.Error())
 		os.Exit(1)
+	}
+	if ok {
+		notify(cfg, "backup succeeded", "backup completed successfully")
 	}
 }
 
 // runBackup executes the restic backup command after confirming with the user.
-func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error {
+func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) (bool, error) {
 	fmt.Fprintln(out, "paths to backup:")
 	for _, p := range cfg.Paths {
 		fmt.Fprintln(out, " -", p)
@@ -118,7 +104,7 @@ func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error
 	resp := strings.TrimSpace(scanner.Text())
 	if strings.ToLower(resp) != "y" {
 		fmt.Fprintln(out, "backup aborted")
-		return nil
+		return false, nil
 	}
 	args := append([]string{"-r", expandUser(cfg.Repo), "backup"}, cfg.Paths...)
 	cmd := exec.Command(resticPath, args...)
@@ -126,10 +112,36 @@ func runBackup(resticPath string, cfg config, in io.Reader, out io.Writer) error
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("restic backup failed: %w", err)
+		return false, fmt.Errorf("restic backup failed: %w", err)
 	}
 	fmt.Fprintln(out, "backup completed")
-	return nil
+	return true, nil
+}
+
+// ensureRestic verifies the restic binary exists, downloading or updating it as needed.
+func ensureRestic() (string, error) {
+	binDir := filepath.Join(".", "bin")
+	resticName := "restic"
+	if runtime.GOOS == "windows" {
+		resticName += ".exe"
+	}
+	resticPath := filepath.Join(binDir, resticName)
+	if _, err := os.Stat(resticPath); os.IsNotExist(err) {
+		fmt.Println("restic not found, downloading latest release...")
+		if err := downloadRestic(binDir, resticPath); err != nil {
+			return "", fmt.Errorf("failed to download restic: %w", err)
+		}
+		fmt.Println("restic downloaded to", resticPath)
+	} else {
+		fmt.Println("restic found, performing self-update...")
+		cmd := exec.Command(resticPath, "self-update")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("restic self-update failed: %w", err)
+		}
+	}
+	return resticPath, nil
 }
 
 // downloadRestic retrieves the latest restic release for the current platform.
